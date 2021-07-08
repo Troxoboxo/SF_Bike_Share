@@ -1,0 +1,476 @@
+---
+title: "SF_Bike_Share"
+author: "Jacob Martin"
+date: "6/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+library(dplyr)
+library(ggplot2)
+library(igraph)
+library(ggraph)
+library(visNetwork)
+library(networkD3)
+library(leaflet)
+library(leaflet.extras)
+library(randomForest)
+library(gganimate)
+library(lubridate)
+library(tidyr)
+library(png)
+library(gifski)
+```
+
+```{r Load_data, include=FALSE}
+station_df <- read.csv('data/station.csv', header = TRUE)
+#status_df <- read.csv('data/status.csv', header = TRUE)
+trip_df <- read.csv('data/trip.csv', header = TRUE)
+weather_df <- read.csv('data/weather.csv', header = TRUE)
+```
+
+```{r Clean_data, include=FALSE}
+# Station Data
+
+station_df$installation_date <- strptime(station_df$installation_date, format = '%m/%d/%Y', tz = 'America/Los_Angeles')
+
+# Status Data
+
+### status_df <- status_df[substr(status_df$time, 1, 4) == 2015, ]   # Performed this operation to minimize the data set down by 2/3
+#status_df$time <- strptime(status_df$time, format = '%Y-%m-%d %H:%M:%S', tz = 'America/Los_Angeles')
+
+
+# Trip Data
+
+trip_df$start_date <- strptime(trip_df$start_date, format = '%Y-%m-%d %H:%M', tz = 'America/Los_Angeles') # Adjust to date time format
+trip_df <- trip_df[format(trip_df$start_date, '%Y') == 2015, ] # Slim down data set to 2015 only 
+trip_df$end_date <- strptime(trip_df$end_date, format = '%Y-%m-%d %H:%M', tz = 'America/Los_Angeles') # Adjust to date time format
+### trip_df <- trip_df %>% select(-zip_code) # Drop this column since the documentation says it is inaccurate and unreliable and based on the user
+### Need to fix mis allignment of naming structure between station names 
+trip_df[trip_df$start_station_name == 'San Jose Government Center', 'start_station_name'] <- 'Santa Clara County Civic Center'
+trip_df[trip_df$end_station_name == 'San Jose Government Center', 'end_station_name'] <- 'Santa Clara County Civic Center'
+trip_df[trip_df$start_station_name == 'Broadway at Main', 'start_station_name'] <- 'Stanford in Redwood City'
+trip_df[trip_df$end_station_name == 'Broadway at Main', 'end_station_name'] <- 'Stanford in Redwood City'
+trip_df[trip_df$start_station_name == 'Washington at Kearny', 'start_station_name'] <- 'Washington at Kearney'
+trip_df[trip_df$end_station_name == 'Washington at Kearny', 'end_station_name'] <- 'Washington at Kearney'
+trip_df[trip_df$start_station_name == 'Post at Kearny', 'start_station_name'] <- 'Post at Kearney'
+trip_df[trip_df$end_station_name == 'Post at Kearny', 'end_station_name'] <- 'Post at Kearney'
+
+# Weather Data
+
+weather_df$date <- strptime(weather_df$date, format = '%Y-%m-%d', tz = 'America/Los_Angeles') # Adjust to time variable
+### weather_df <- weather_df[format(weather_df$date, '%Y') == 2015, ] # Slim down data set to 2015 only 
+weather_df[weather_df$precipitation_inches == 'T', 'precipitation_inches'] <- '0.01' # T stands for Trace so we will assign it to the lowest value so we can amend this to a continuous variable.  It is in the manual as less than 0.01 inches of rain in the day. 
+weather_df$precipitation_inches <- as.numeric(weather_df$precipitation_inches)
+weather_df <- na.omit(weather_df) # there are ~ 4 rows that all have mostly missing information for a zip code and 1 row belonging to another
+
+weather_df[weather_df$zip_code == 94107, 'city'] <- 'San Francisco' # Add a city to which we can join the data
+weather_df[weather_df$zip_code == 94063, 'city'] <- 'Redwood City'
+weather_df[weather_df$zip_code == 94301, 'city'] <- 'Palo Alto'
+weather_df[weather_df$zip_code == 94041, 'city'] <- 'Mountain View'
+weather_df[weather_df$zip_code == 95113, 'city'] <- 'San Jose'
+
+
+# Wrote over the files so each load doesn't consume as much time
+### write.csv(status_df, file = 'status.csv', row.names = FALSE, sep = ',') 
+### write.csv(station_df, file = 'station.csv', row.names = FALSE, sep = ',')
+### write.csv(weather_df, file = 'weather.csv', row.names = FALSE, sep = ',')
+### write.csv(trip_df, file = 'trip.csv', row.names = FALSE, sep = ',')
+
+```
+
+
+# Map
+Since we have geographical data, our first step was to place the stations on a map to build a framework of how our network might be connected together.  In this case it seems like the stations have 3 main clusters.  The first is in the heart of downtown San Francisco.  The second is similarly in San Jose.  In the middle of those two cities runs a rail line and along this line in the cities of Palo Alto, Redwood City, and Mountain View are a series of stations.  These form the final cluster.  It will be interesting to see how connections are formed from these stations. We hypothesize to see strong connections inside of each cluster and fewer trips between stations geographically farther away. 
+
+```{r Station_Leaflet}
+m <- leaflet(station_df) %>%
+  addTiles() %>%
+  addMarkers(
+    lat = ~lat,
+    lng = ~long, 
+    popup = ~name
+  )
+m
+```
+
+We will be doing our analysis on the San Francisco data only our weather nodes will be based on that area.  2015 also does not contain a full year of dates to base our nodes on so we will be using the 2014 weather data to create our high / low brackets for each weather condition. 
+
+```{r Join_Clean_Data, include = FALSE}
+master_df <- trip_df
+# Join Trip and station data frames
+station_df_modified <- station_df %>% select(-name) # Need to break out and join twice since they have a start and ending station
+colnames(station_df_modified) <- c('start_station_id', 'start_station_lat', 'start_station_lng', 'start_station_dock_count', 'start_station_city', 'start_station_install_date') # Rename columns so when we join they align and no duplicates
+master_df <- left_join(master_df, station_df_modified, by='start_station_id')
+
+station_df_modified <- station_df %>% select(-name) # Now for end station 
+colnames(station_df_modified) <- c('end_station_id', 'end_station_lat', 'end_station_lng', 'end_station_dock_count', 'end_station_city', 'end_station_install_date') # Rename columns so when we join they align and no duplicates
+master_df <- left_join(master_df, station_df_modified, by='end_station_id')
+
+# Join Master and Weather Data
+master_df$raw_date <- format(as.POSIXct(master_df$start_date, format = '%Y-%m-%d %H:%M:%S'), format = '%Y-%m-%d')
+master_df$raw_date <- strptime(master_df$raw_date, format = '%Y-%m-%d', tz = 'America/Los_Angeles')
+master_df <- left_join(master_df, weather_df, by = c('start_station_city' = 'city', 'raw_date' = 'date'))
+
+# Add weekday variable
+master_df$day_of_week <- weekdays(master_df$raw_date)
+master_df$weekday <- sapply(master_df$day_of_week, 
+                            FUN = function(x) { if (x == 'Saturday' | x == 'Sunday') {'Weekend'} else {'Weekday'} }
+                            )
+
+# Omit missing weather data rows - This removes about 7k rows where we don't have weather data.  Almost all of this is in cities outside of SF so it will be removed regardless later
+master_df <- na.omit(master_df)
+
+# Add Weather Node Info
+weather_2014_SF_only <- read.csv('data/2014SFWeather.csv') # Read in data for 2014 san francisco 
+
+HighMedLow_Func <- function(data, H, L, lab) { # Establish a function to easily create factions based on box plot stats info
+  if (data >= H){
+    r <- paste0('High_', lab)
+  } else if (data <= L) {
+    r <- paste0('Low_', lab)
+  } else {
+    r <- paste0('Medium_', lab)
+  }
+  return(r)
+}
+
+boxplot.stats(weather_2014_SF_only$mean_temperature_f) # Temperature 
+master_df$temp_node <- sapply(master_df$mean_temperature_f, FUN = HighMedLow_Func, H = 65, L = 57, lab = 'Temp')
+
+boxplot.stats(weather_2014_SF_only$mean_dew_point_f) # Dew Point
+master_df$dew_point_node <- sapply(master_df$mean_dew_point_f, FUN = HighMedLow_Func, H = 55, L = 47, lab = 'Dew_Point')
+
+boxplot.stats(weather_2014_SF_only$mean_humidity) # Humidity
+master_df$humidity_node <- sapply(master_df$mean_humidity, FUN = HighMedLow_Func, H = 75, L = 64, lab = 'Humidity')
+
+master_df <- master_df %>% select(-max_sea_level_pressure_inches) # Almost no variation in the data so removing it 
+master_df <- master_df %>% select(-max_visibility_miles) # No variation in the data so removing it 
+master_df <- master_df %>% select(-events) # inconsistent
+master_df <- master_df %>% select(-wind_dir_degrees) # Removed because data is almost uniform
+
+
+master_df$visibility_node <- sapply(master_df$min_visibility_miles,
+                                    FUN = function(x) { if (x < 7) {'Low_Visibility'} else {'High_Visibility'} }
+                                    ) # Based on min visibility w/ 25% or less as low vis
+
+master_df$wind_node <- sapply(master_df$max_wind_Speed_mph,
+                              FUN = function(x) { if (x > 21) {'High_Wind_Speed'} else {'Low_Wind_Speed'} }
+                              )# Based on max wind speed w/ 75% interval or greater as high wind speed
+
+master_df$rain_node <- sapply(master_df$precipitation_inches,
+                              FUN = function(x) { if (x >= 0.25) {'Rain'} else {'No_Rain'} }
+                              ) # Based on what would produce a moderate amount of rainfall
+
+master_df$cloudy_node <- sapply(master_df$cloud_cover,
+                              FUN = function(x) { if (x > 4) {'Cloudy'} else {'Not_Cloudy'} }
+                              )# Based on values of 4 or less being not cloudy.  Arbitrary decision as half the data splits into each camp. 0 is clear in the dataset
+
+
+#summary(as.factor(weather_2014_SF_only$cloud_cover))
+#boxplot.stats(asweather_2014_SF_only$precipitation_inches) # 
+#ggplot(weather_2014_SF_only, aes(y = min_visibility_miles)) + geom_boxplot()
+
+```
+
+```{r Neo4j_export_data, include=FALSE}
+# export <- master_df %>% filter(start_station_city == 'San Francisco' & end_station_city == 'San Francisco') %>% select(-start_station_name, -end_station_name, -start_station_lat, -start_station_lng, -start_station_dock_count, -start_station_city, -start_station_install_date, -end_station_lat, -end_station_lng, -end_station_dock_count, -end_station_city, -end_station_install_date, -raw_date, -zip_code, -temp_node, -dew_point_node, -humidity_node, -visibility_node, -wind_node, -rain_node, -cloudy_node)
+# write.csv(export, file = 'data/neo4j-trips.csv', row.names = FALSE)
+# 
+# 
+# export <- station_df %>% filter(city == 'San Francisco')
+# write.csv(export, file = 'data/neo4j-stations.csv', row.names = FALSE)
+
+# export <- master_df %>% filter(start_station_city == 'San Francisco' & end_station_city == 'San Francisco') %>% select(id, temp_node, dew_point_node, humidity_node, visibility_node, wind_node, rain_node, cloudy_node)
+# write.csv(export, file = 'data/neo4j-weathernodes.csv', row.names = FALSE)
+
+
+```
+
+```{r station_network_graph}
+start_end_stations <- master_df %>% count(start_station_name, end_station_name, sort = TRUE)
+# unique(start_end_stations[start_end_stations$end_station_name %in% station_df$name == FALSE, 'end_station_name'])
+ggplot(start_end_stations, aes(x=start_station_name, y=n)) + geom_col()
+ggplot(start_end_stations, aes(x=end_station_name, y=n)) + geom_col()
+
+# Set up nodes
+nodes <- as.data.frame(unique(start_end_stations$start_station_name))
+nodes$id <- 1:length(nodes$`unique(start_end_stations$start_station_name)`)
+colnames(nodes) <- c('name', 'id')
+nodes <- left_join(nodes, station_df[, c('name', 'city')], by='name')
+nodes <- nodes %>% rename('group' = 'city')
+nodes <- nodes %>% arrange(group)
+
+
+# Set up edges
+edges <- start_end_stations
+colnames(edges) <- c('from', 'to', 'label')
+edges$length <- 1000
+edges$arrows <- 'to'
+edges$width <- log10(edges$label) + 1
+
+# Create graph
+routes_igraph <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
+routes_igraph
+
+routes_vis <- toVisNetworkData(routes_igraph)
+visNetwork(nodes = routes_vis$nodes, edges = routes_vis$edges) %>%
+  visGroups(groupname = 'San Francisco', color = '#437FFF') %>% 
+  visGroups(groupname = 'Palo Alto', color = '#FFC300') %>%
+  visGroups(groupname = 'Mountain View', color = '#F96131') %>%
+  visGroups(groupname = 'Redwood City', color = '#4ED56A') %>%
+  visGroups(groupname = 'San Jose', color = '#A675F6') %>%
+  visLegend()
+
+# Arc plot of connectivity
+ggraph(routes_igraph, layout = 'linear') + 
+  geom_edge_arc(aes(width = label), alpha = 0.8) 
+
+
+```
+
+``` {r city_to_city_network} 
+city_to_city <- master_df %>% count(start_station_city, end_station_city, sort = TRUE)
+
+nodes <- city_to_city %>% select(start_station_city)
+nodes <- unique(nodes)
+nodes <- cbind(nodes, 1:5)
+colnames(nodes) <- c('city', 'id')
+nodes <- nodes %>% arrange('city')
+nodes$color <- c('#437FFF', '#A675F6', '#F96131', '#FFC300', '#4ED56A')
+
+edges <- city_to_city
+colnames(edges) <- c('from', 'to', 'label')
+edges$length <- 700
+edges$arrows <- 'to'
+
+
+city_routes_igraph <- graph_from_data_frame(d = edges, vertices = nodes, directed = TRUE)
+city_routes_igraph
+
+
+city_routes_vis <- toVisNetworkData(city_routes_igraph)
+visNetwork(nodes = city_routes_vis$nodes, edges = city_routes_vis$edges) 
+
+# Create Table of trips at same or different city 
+val1 <- city_to_city %>% filter(start_station_city == end_station_city) %>% rename('Same_City' = 'n') %>% select(start_station_city, Same_City)
+val2 <- city_to_city %>% filter(start_station_city != end_station_city) %>% group_by(start_station_city) %>% summarise('Diff_City' = sum(n))
+val3 <- city_to_city %>% group_by(start_station_city) %>% summarise('Total' = sum(n)) 
+
+trips_by_city <- left_join(val3, val1, by='start_station_city') 
+trips_by_city$Same_City_Perc <- round(trips_by_city$Same_City / trips_by_city$Total * 100, 4) # Create percentage 
+trips_by_city <- left_join(trips_by_city, val2, by='start_station_city')
+trips_by_city$Diff_City_Perc <- round(trips_by_city$Diff_City / trips_by_city$Total * 100, 4) # Create percentage 
+
+trips_by_city
+
+```
+
+``` {r trip_duration}
+mean(master_df$duration / 60) # Overall duration
+master_df %>% group_by(start_station_city) %>% summarise(average_duration_in_minutes = mean(duration) / 60) # List of average duration
+
+summary(master_df %>% filter(start_station_city == 'Redwood City') %>% select(duration))
+summary(master_df %>% filter(start_station_city == 'Palo Alto') %>% select(duration))
+summary(master_df %>% filter(start_station_city == 'Mountain View') %>% select(duration))
+summary(master_df %>% filter(start_station_city == 'San Francisco') %>% select(duration))
+summary(master_df %>% filter(start_station_city == 'San Jose') %>% select(duration))
+
+# Box plot by city 
+ylim1 <- boxplot.stats(master_df$duration)$stats[c(1,5)] # Need to set scales since some extreme outliers exist
+ggplot(master_df, aes(x = start_station_city, y = duration, group = start_station_city)) + 
+  geom_boxplot(aes(fill = start_station_city)) + 
+  coord_cartesian(ylim = ylim1 * 1.3) + 
+  theme_minimal()
+
+
+```
+
+```{r weekday_plot}
+master_df %>% group_by(weekday) %>% summarise(n = n()) %>% mutate(weekday = factor(weekday, levels = c('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'))) %>% 
+  ggplot(aes(x = weekday, y = n, fill = weekday)) + 
+  geom_col() + 
+  theme_minimal() + 
+  ylab('Number of Trips') +
+  xlab('Day of Week')
+  
+```
+
+```{r Trips_Over_Time}
+selectedcity <- 'San Francisco'
+
+p <- master_df %>% select(id, raw_date, start_station_city, subscription_type) %>% filter(start_station_city == selectedcity) %>% 
+  mutate(raw_date = as.Date(raw_date)) %>% group_by(raw_date, subscription_type) %>% summarise(Num_Trips = n())
+p <- as.data.frame(p)
+
+holidays <- data.frame(
+  name = c('New Years', 'Martin Luther King Jr. Day', 'Memorial Day', 'Independence Day'), 
+  holiday_date = as.Date(c('2015-01-01', '2015-01-19', '2015-04-25', '2015-07-03')),
+  yval_cust = c(
+    p[p$raw_date == '2015-01-01' & p$subscription_type == 'Customer', 'Num_Trips'][1],
+    p[p$raw_date == '2015-01-19' & p$subscription_type == 'Customer', 'Num_Trips'][1],
+    p[p$raw_date == '2015-04-25' & p$subscription_type == 'Customer', 'Num_Trips'][1],
+    p[p$raw_date == '2015-07-03' & p$subscription_type == 'Customer', 'Num_Trips'][1]
+  ),
+  yval_sub = c(
+    p[p$raw_date == '2015-01-01' & p$subscription_type == 'Subscriber', 'Num_Trips'][1],
+    p[p$raw_date == '2015-01-19' & p$subscription_type == 'Subscriber', 'Num_Trips'][1],
+    p[p$raw_date == '2015-04-25' & p$subscription_type == 'Subscriber', 'Num_Trips'][1],
+    p[p$raw_date == '2015-07-03' & p$subscription_type == 'Subscriber', 'Num_Trips'][1]
+  )
+)
+
+
+ggplot() +
+  geom_line(data = p, aes(x = raw_date, y = Num_Trips, color = subscription_type), size = 1) + 
+  geom_point(data = holidays, aes(x = holiday_date, y = yval_cust), color = '#D20000') + 
+  geom_point(data = holidays, aes(x = holiday_date, y = yval_sub), color = '#D20000') + 
+  scale_x_date(date_labels = '%b', date_breaks = '1 month') + 
+  theme_minimal() +
+  theme(
+    legend.position = 'bottom',
+    plot.title = element_text(hjust = .5)
+    
+  ) + 
+  scale_color_manual(values = c('#7A2DF8', '#41C4DB')) + 
+  xlab('Date') + 
+  labs(title = 'Ridership by Day and Subscription Type', color = 'Subscription Type')
+
+```
+
+``` {r BubblePlot}
+# Bubble Plot 
+s <- master_df %>% select(raw_date, start_station_id, end_station_id) %>% mutate(raw_date = as.Date(raw_date)) # Grab Raw data
+s2 <- s %>% group_by(start_station_id, raw_date) %>% summarise(n()) # Create tally of each day for each start station
+s3 <- s %>% group_by(end_station_id, raw_date) %>% summarise(n()) # Create tally of each day for each end station 
+
+s4 <- full_join(s2, s3, by = c('start_station_id' = 'end_station_id', 'raw_date' = 'raw_date')) %>% arrange(start_station_id, raw_date)
+colnames(s4) <- c('Station', 'Date', 'Start_Station_Trips', 'End_Station_Trips') # Amend column names
+s4 <- s4 %>% ungroup() %>% complete(Station, Date = seq(min(Date), max(Date), by = 'day')) # Add missing sequence info for explicit 0 values 
+s4[is.na(s4)] <- 0
+s4 <- left_join(s4, station_df[, c('id', 'city')], by = c('Station' = 'id'))
+
+# Plot 
+p <- ggplot(s4, aes(x = Start_Station_Trips, y = End_Station_Trips, colour = city)) + 
+  geom_point(alpha = 0.7) + 
+  theme_bw() + 
+  labs(title = 'Date: {frame_time}', x = 'Start Station Count', y = 'End Station Count') + 
+  transition_time(Date) +
+  ease_aes('linear')
+
+p  
+```
+
+``` {r Random_Forest_for_Weather}
+s <- master_df %>% select(id, raw_date, start_station_city, 22:43) # Select Data
+s <- s %>% select(-events) # Remove that column since it is inconsistent 
+summary(s)
+s <- s %>% filter(start_station_city == 'San Francisco') # Filter by city
+
+s <- na.omit(s) # Remove missing values for weather 
+s2 <- s %>% group_by(raw_date) %>% summarize (num = n()) # Create a day by day number of trips taken 
+s <- s %>% distinct(raw_date, .keep_all = TRUE)
+s2 <- left_join(s2, s[, c(2, 4:length(colnames(s)))], by = 'raw_date')
+s2$week_day <- as.factor(weekdays(s2$raw_date)) # Add weekday to standardize 
+
+# Train / Test samples 
+sample_size <- floor(0.75 * nrow(s2))
+set.seed(111)
+train_ind <- sample(seq_len(nrow(s2)), size = sample_size)
+
+train <- s2[train_ind, ]
+train <- train %>% select(-raw_date)
+test <- s2[-train_ind, ]
+test <- test %>% select(-raw_date)
+
+# Building the RF model 
+rf.bag <- randomForest(num~., data=train, importance = TRUE, mtry = 22, ntree=500)
+rf.bag
+importance(rf.bag)
+varImpPlot(rf.bag)
+
+rf.bag.pred <- predict(rf.bag, newdata = test)
+plot(test$num, rf.bag.pred); abline(0,1)
+
+```
+
+
+``` {r Neo4j-Outputs}
+View(read.csv('data/cypher-query-results/trip-pathes.csv', header = TRUE, col.names = c('start_station', 'end_station', 'trip_count')))
+View(read.csv('data/cypher-query-results/station-usage.csv', header = TRUE, col.names = c('station_name', 'usage_count')))
+
+s <- read.csv('data/cypher-query-results/station-usage.csv', header = TRUE, col.names = c('station_name', 'usage_count')) 
+s %>% ggplot(aes(x = usage_count)) + 
+  geom_histogram(aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha = 0.2, fill = 'red') + 
+  geom_vline(aes(xintercept = mean(usage_count)), color = 'blue', linetype = 'dashed') +
+  scale_x_continuous(limit = c(0, 42000), breaks = c(0, 5000, 10000, 15000, 20000, 25000, 30000, 35000, 40000), labels = scales::comma) + 
+  theme_classic() + 
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = 'none'
+  ) + 
+  xlab('Usage_Count')
+  
+View(read.csv('data/cypher-query-results/day-of-week-subscription.csv', header = TRUE, col.names = c('day', 'membership_type', 'number_trips')))
+
+## Graph Algorithms
+# Louvain on station to station data
+s <- read.csv('data/cypher-query-results/s-s-louvain.csv', header = TRUE, col.names = c('name', 'communityId', 'intermediateCommunityIds'))
+s2 <- station_df %>% filter(city == 'San Francisco') %>% left_join(s, by = 'name')
+
+pal <- colorFactor(c('#4D59E5', '#DEDE63', '#D2904E', '#3EC9B4'), domain = c(25, 26, 30, 33))
+
+m <- leaflet(s2) %>%
+  addTiles( urlTemplate = "//{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png") %>%
+  addCircleMarkers(
+    radius = 3, 
+    opacity = 1,
+    color = ~pal(communityId),
+    lat = ~lat,
+    lng = ~long,
+    label = ~name
+  )
+m
+
+# Weakly Connected Components on station to station data
+s <- read.csv('data/cypher-query-results/s-s-wcc.csv', header = TRUE, col.names = c('station_name', 'componentId'))
+View(s %>% arrange(desc(componentId)))
+  
+# Page Rank on Customer / Subscriber locations
+View(read.csv('data/cypher-query-results/s-s-subscriber-pagerank.csv', header = TRUE, , col.names = c('name', 'score')))
+View(read.csv('data/cypher-query-results/s-s-customer-pagerank.csv', header = TRUE, , col.names = c('name', 'score')))
+
+s <- read.csv('data/cypher-query-results/s-s-customer-pagerank.csv', header = TRUE, , col.names = c('name', 'score'))
+s2 <- station_df %>% filter(city == 'San Francisco') %>% left_join(s, by = 'name')
+
+pal <- pal <- colorNumeric(
+  palette = colorRampPalette(c('red', 'green'))(35), 
+  domain = s2$score
+)
+
+m <- leaflet(s2) %>%
+  addTiles( urlTemplate = "//{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png") %>%
+  addCircleMarkers(
+    radius = 3, 
+    opacity = 1,
+    color = ~pal(score),
+    lat = ~lat,
+    lng = ~long,
+    label = ~name
+  )
+m
+
+
+```
+
+
+
+
+
+
