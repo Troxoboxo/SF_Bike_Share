@@ -1,0 +1,15 @@
+﻿day,membership_type,number_trips
+Friday,Subscriber,31563
+Friday,Customer,3889
+Monday,Subscriber,35927
+Monday,Customer,2785
+Saturday,Subscriber,6451
+Saturday,Customer,6012
+Sunday,Subscriber,5053
+Sunday,Customer,4634
+Thursday,Subscriber,36553
+Thursday,Customer,3121
+Tuesday,Subscriber,36040
+Tuesday,Customer,2690
+Wednesday,Subscriber,36886
+Wednesday,Customer,2779
