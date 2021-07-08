@@ -1,0 +1,182 @@
+CREATE CONSTRAINT ON (n:Station) ASSERT n.station_id is UNIQUE;
+CREATE CONSTRAINT ON (n:Trip) ASSERT n.trip_id is UNIQUE;
+CREATE CONSTRAINT ON (n:City) ASSERT n.city_name is UNIQUE;
+CREATE CONSTRAINT ON (n:Subscription_Type) ASSERT n.subscription_type is UNIQUE;
+CREATE CONSTRAINT ON (n:Day_Of_Week) ASSERT n.name is UNIQUE;
+CREATE CONSTRAINT ON (n:Temperature) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Dew_Point) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Humidity) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Visibility) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Wind) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Rain) ASSERT n.type is UNIQUE;
+CREATE CONSTRAINT ON (n:Cloudy) ASSERT n.type is UNIQUE;
+
+
+#### SET UP STATIONS AND TRIPS
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-stations.csv' AS row
+CREATE (s:Station {
+    station_id: row.id,
+    name: row.name,
+    dock_count: row.dock_count,
+    longitude: row.long,
+    latitude: row.lat,
+    installation_date: row.installation_date  
+});
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-trips.csv' AS row
+CREATE (t:Trip {
+    trip_id: row.id,
+    start_station_id: row.start_station_id,
+    end_station_id: row.end_station_id,
+    duration: row.duration,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    day_of_week: row.day_of_week,
+    weekday: row.weekday,
+    bike_id: row.bike_id,
+    subscription_type: row.subscription_type,
+    mean_temperature_f: row.mean_temperature_f,
+    max_temperature_f: row.max_temperature_f,
+    min_temperature_f: row.min_temperature_f,
+    mean_humidity: row.mean_humidity,
+    max_humidity: row.max_humidity,
+    min_humidity: row.min_humidity,
+    mean_dew_point_f: row.mean_dew_point_f,
+    max_dew_point_f: row.max_dew_point_f,
+    min_dew_point_f: row.min_dew_point_f,
+    mean_sea_level_pressure_inches: row.mean_sea_level_pressure_inches,
+    min_sea_level_pressure_inches: row.min_sea_level_pressure_inches,
+    mean_wind_speed_mph: row.mean_wind_speed_mph,
+    max_wind_speed_mph: row.max_wind_Speed_mph,
+    max_gust_speed_mph: row.max_gust_speed_mph,
+    mean_visibility_miles: row.mean_visibility_miles,
+    min_visibility_miles: row.min_visibility_miles,
+    precipitation_inches: row.precipitation_inches,
+    cloud_cover: row.cloud_cover
+});
+
+MATCH (t:Trip), (s:Station)
+WHERE t.start_station_id = s.station_id
+CREATE (t)-[r:STARTS_AT]->(s);
+
+MATCH (t:Trip), (s:Station)
+WHERE t.end_station_id = s.station_id
+CREATE (t)-[r:ENDS_AT]->(s);
+
+#### SET UP DAY OF WEEK INFO
+
+CREATE (monday:Day_Of_Week {name: 'Monday', type: 'Weekday'});
+CREATE (tuesday:Day_Of_Week {name: 'Tuesday', type: 'Weekday'});
+CREATE (wednesday:Day_Of_Week {name: 'Wednesday', type: 'Weekday'});
+CREATE (thursday:Day_Of_Week {name: 'Thursday', type: 'Weekday'});
+CREATE (friday:Day_Of_Week {name: 'Friday', type: 'Weekday'});
+CREATE (satday:Day_Of_Week {name: 'Saturday', type: 'Weekend'});
+CREATE (sunday:Day_Of_Week {name: 'Sunday', type: 'Weekend'});
+
+MATCH (t:Trip), (d:Day_Of_Week)
+WHERE t.day_of_week = d.name
+MERGE (t)-[:HAPPENS_ON]->(d);
+
+#### SET UP CITY NODE
+
+CREATE (san_francisco:City {name: 'San Francisco'});
+
+MATCH (s:Station), (c:City)
+MERGE (s)-[:LOCATED_IN]->(c);
+
+#### SET UP SUBSCRIPTION NODES
+
+CREATE (s:Subscription_Type {type: 'Customer'});
+CREATE (s2:Subscription_Type {type: 'Subscriber'});
+
+MATCH (t:Trip), (s:Subscription_Type)
+WHERE t.subscription_type = s.type
+CREATE (t)-[:MEMBERSHIP_TYPE]->(s);
+
+#### SET UP WEATHER CONDITIONS
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Temperature {type:row.temp_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_TEMPERATURE_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Rain {type:row.rain_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_RAIN_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Wind {type:row.wind_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_WIND_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Humidity {type:row.humidity_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_HUMIDITY_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Cloudy {type:row.cloudy_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_CLOUD_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Dew_Point {type:row.dew_point_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_DEW_POINT_STATUS]->(w);
+
+LOAD CSV WITH HEADERS FROM 'file:///neo4j-weathernodes.csv' AS row
+MERGE (w:Visibility {type:row.visibility_node})
+WITH row, w
+MATCH (t:Trip {trip_id: row.id})
+MERGE (t)-[:HAS_VISIBILITY_STATUS]->(w);
+
+#### Remove redundant properties
+MATCH (n:Trip)
+REMOVE n.start_station_id
+REMOVE n.end_station_id
+REMOVE n.day_of_week
+REMOVE n.subscription_type
+REMOVE n.weekday
+RETURN n LIMIT 10;
+
+#### Amend variable data types
+MATCH (s:Station)
+SET s.installation_date = date(s.installation_date)
+SET s.station_id = toInteger(s.station_id)
+SET s.dock_count = toInteger(s.dock_count)
+SET s.latitude = toFloat(s.latitude)
+SET s.longitude = toFloat(s.longitude)
+
+MATCH (t:Trip)
+SET t.min_temperature_f = toInteger(t.min_temperature_f)
+SET t.trip_id = toInteger(t.trip_id)
+SET t.mean_wind_speed_mph = toInteger(t.mean_wind_speed_mph)
+SET t.mean_sea_level_pressure_inches = toFloat(t.mean_sea_level_pressure_inches)
+SET t.mean_dew_point_f = toInteger(t.mean_dew_point_f)
+SET t.max_wind_Speed_mph = toInteger(t.max_wind_Speed_mph)
+SET t.mean_humidity = toInteger(t.mean_humidity)
+SET t.max_humidity = toInteger(t.max_humidity)
+SET t.max_dew_point_f = toInteger(t.max_dew_point_f)
+SET t.min_dew_point_f = toInteger(t.min_dew_point_f)
+SET t.max_gust_speed_mph = toInteger(t.max_gust_speed_mph)
+SET t.min_sea_level_pressure_inches = toFloat(t.min_sea_level_pressure_inches)
+SET t.mean_temperature_f = toInteger(t.mean_temperature_f)
+SET t.min_humidity = toInteger(t.min_humidity)
+SET t.duration = toInteger(t.duration)
+SET t.max_temperature_f = toInteger(t.max_temperature_f)
+SET t.mean_visibility_miles = toInteger(t.mean_visibility_miles)
+SET t.cloud_cover = toInteger(t.cloud_cover)
+SET t.precipitation_inches = toFloat(t.precipitation_inches)
+SET t.bike_id = toInteger(t.bike_id)
+SET t.min_visibility_miles = toInteger(t.min_visibility_miles);
+
+
+
