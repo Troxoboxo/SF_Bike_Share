@@ -13,6 +13,7 @@ Files:
 * Project_Proposal2.pdf - Updated version and includes the graph data algorithms and queries
 * Project_Proposal3.pdf - Addition of the GUI dashboard and Cypher Actions information
 * BikeShare_RProj - Folder containing the work done in R to produce visualizations, profiling of data, and cleaning steps
+* BikeProj_Shiny - Folder containing the architecture and data for the Shiny GUI
 * Neo4j_Setup_Script - Instructions in order to load the data from the zip files labeled for neo4j.  Everything was slimmed down significantly to enable Neo to create the network structure
 
 Links: 
