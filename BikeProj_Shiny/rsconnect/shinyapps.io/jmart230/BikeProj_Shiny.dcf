@@ -1,0 +1,12 @@
+name: BikeProj_Shiny
+title: BikeProj_Shiny
+username:
+account: jmart230
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 4402044
+bundleId: 4852414
+url: https://jmart230.shinyapps.io/BikeProj_Shiny/
+when: 1627137745.85269
+asMultiple: FALSE
+asStatic: FALSE
