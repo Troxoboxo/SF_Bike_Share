@@ -11,8 +11,11 @@ Note the data has been slimmed down to be for values during 2015 to help lower c
 Files: 
 * Project_Proposal1.pdf - Contains the data graph and an introduction to the purose of the project
 * Project_Proposal2.pdf - Updated version and includes the graph data algorithms and queries
+* Project_Proposal3.pdf - Addition of the GUI dashboard and Cypher Actions information
 * BikeShare_RProj - Folder containing the work done in R to produce visualizations, profiling of data, and cleaning steps
 * Neo4j_Setup_Script - Instructions in order to load the data from the zip files labeled for neo4j.  Everything was slimmed down significantly to enable Neo to create the network structure
 
 Links: 
 * dataset: https://www.kaggle.com/benhamner/sf-bay-area-bike-share
+* GUI Dashboard: https://jmart230.shinyapps.io/BikeProj_Shiny/
+* Bike Share Website: https://www.sfmta.com/getting-around/bike/bike-share
