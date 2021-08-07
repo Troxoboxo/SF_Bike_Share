@@ -1,0 +1,100 @@
+#### Looking at Station usage as a whole 
+//Station - Trip Degree
+MATCH (s:Station) 
+WITH s, SIZE((s)<-[:ENDS_AT|STARTS_AT]-()) as station_usage
+RETURN s.name as station_name, station_usage
+ORDER BY station_usage DESC
+LIMIT 10
+
+#### Where trips started based on subscription type 
+//Start Station by Sub Type
+MATCH (s1:Station)<-[:STARTS_AT]-(t:Trip)-[:MEMBERSHIP_TYPE]->(s_t:Subscription_Type)
+RETURN s1.name AS start_station, s_t.type, COUNT(t) AS number_trips
+
+#### Script to look at trips by day of week 
+//Day of Week Trip Count
+MATCH (t:Trip)-[:HAPPENS_ON_DAY]->(d:Day_Of_Week)
+RETURN d.name AS day, count(t) AS number_trips
+
+//Day of Week Trip Count by Sub
+MATCH (m:Subscription_Type)<-[:MEMBERSHIP_TYPE]-(t:Trip)-[:HAPPENS_ON_DAY]->(d:Day_Of_Week)
+RETURN d.name AS day, m.type AS membership_type, count(t) AS number_trips
+ORDER BY day, number_trips DESC
+
+#### Where trips went start -> ended 
+//Start -> End Station Count
+MATCH (s1: Station) <-[:STARTS_AT]-(t:Trip)-[:ENDS_AT]->(s2:Station)
+RETURN s1.name AS start_station, s2.name AS end_station, count(t) AS trip_count
+ORDER BY trip_count DESC
+
+#### Same script but for subscribers
+//Start -> End Station / Subscriber Count
+MATCH (t:Trip)-[:MEMBERSHIP_TYPE]->(m:Subscription_Type)
+WHERE m.type = 'Subscriber'
+MATCH (s1: Station) <-[:STARTS_AT]-(t:Trip)-[:ENDS_AT]->(s2:Station), (n:Subscription_Type)
+RETURN s1.name, s2.name, COUNT(DISTINCT t) AS trip_count
+ORDER BY trip_count DESC
+
+#### Same script but for customers
+//Start -> End Station / Customer Count
+MATCH (t:Trip)-[:MEMBERSHIP_TYPE]->(m:Subscription_Type)
+WHERE m.type = 'Customer'
+MATCH (s1: Station) <-[:STARTS_AT]-(t:Trip)-[:ENDS_AT]->(s2:Station), (n:Subscription_Type)
+RETURN s1.name, s2.name, COUNT(DISTINCT t) AS trip_count
+ORDER BY trip_count DESC
+
+#### Projections
+//Create Projection - Customer Trips Weighted by Trip Count
+CALL gds.graph.create.cypher(
+  "s-s-customer-weighted-by-trip",
+  "MATCH (s: Station) RETURN ID(s) AS id",
+  "MATCH (t:Trip)-[:MEMBERSHIP_TYPE]->(m:Subscription_Type) WHERE m.type = 'Customer' MATCH (s1: Station) <-[:STARTS_AT]-(t:Trip)-[:ENDS_AT]->(s2:Station) RETURN ID(s1) AS source, ID(s2) AS target, COUNT(DISTINCT t) AS trip_count"
+)
+
+//Create Projection - Subscriber Trips Weighted by Trip Count
+CALL gds.graph.create.cypher(
+  "s-s-subscriber-weighted-by-trip",
+  "MATCH (s: Station) RETURN ID(s) AS id",
+  "MATCH (t:Trip)-[:MEMBERSHIP_TYPE]->(m:Subscription_Type) WHERE m.type = 'Subscriber' MATCH (s1: Station) <-[:STARTS_AT]-(t:Trip)-[:ENDS_AT]->(s2:Station) RETURN ID(s1) AS source, ID(s2) AS target, COUNT(DISTINCT t) AS trip_count"
+)
+
+#### Algorithms
+//S-S-WCC
+CALL gds.wcc.stream("s-s-weighted-by-trip", {
+    relationshipWeightProperty: 'trip_count',
+    threshold: 430
+})
+YIELD nodeId, componentId
+RETURN gds.util.asNode(nodeId).name AS station_name, componentId
+
+//S-S-Customer-PageRank
+CALL gds.pageRank.stream("s-s-customer-weighted-by-trip", {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  relationshipWeightProperty: 'trip_count'
+})
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).name AS name, score
+ORDER BY score DESC, name ASC
+
+//S-S-Subscriber-PageRank
+CALL gds.pageRank.stream("s-s-subscriber-weighted-by-trip", {
+  maxIterations: 20,
+  dampingFactor: 0.85,
+  relationshipWeightProperty: 'trip_count'
+})
+YIELD nodeId, score
+RETURN gds.util.asNode(nodeId).name AS name, score
+ORDER BY score DESC, name ASC
+
+//S-S-Louvain
+CALL gds.louvain.stream("s-s-weighted-by-trip", { relationshipWeightProperty: 'trip_count' })
+YIELD nodeId, communityId, intermediateCommunityIds
+RETURN gds.util.asNode(nodeId).name AS name, communityId, intermediateCommunityIds
+ORDER BY name ASC
+
+
+
+
+
+
